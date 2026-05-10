@@ -46,7 +46,7 @@ ExecStart=/usr/bin/python3 /opt/clawbreak/server.py
 Restart=always
 RestartSec=5
 Environment=HOME=/home/clawbreak
-Environment=CLAWBREAK_LLM_API_KEY=${CLAWBREAK_LLM_API_KEY}
+Environment=CLAWBREAK_LLM_API_KEY=GUNQBRQVDGXAPZDCOLYE7XKMZRAN4ZOQNYHA
 Environment=CLAWBREAK_PORT=8080
 
 [Install]
