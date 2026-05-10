@@ -4,6 +4,17 @@ llm:
   model: "zai-org/GLM-5.1-FP8"
   max_tokens: 4096
   temperature: 0.7
+  providers:
+    - name: "vultr-deepseek"
+      base_url: "https://api.vultrinference.com/v1"
+      api_key: "YOUR_VULTR_API_KEY"
+      model: "nvidia/DeepSeek-V3.2-NVFP4"
+      auth: "bearer"
+    - name: "vultr-kimi"
+      base_url: "https://api.vultrinference.com/v1"
+      api_key: "YOUR_VULTR_API_KEY"
+      model: "moonshotai/Kimi-K2.5"
+      auth: "bearer"
 
 server:
   host: "0.0.0.0"
@@ -32,9 +43,7 @@ mcp:
 channels:
   telegram:
     enabled: false
-    token: ""
   discord:
     enabled: false
-    token: ""
 
 crons: []

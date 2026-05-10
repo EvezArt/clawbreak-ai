@@ -360,3 +360,68 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# --- Session Management ---
+
+@app.get("/sessions")
+async def list_sessions():
+    """List all chat sessions."""
+    rows = memory.conn.execute(
+        "SELECT session_id, COUNT(*) as msg_count, MAX(timestamp) as last_active FROM messages GROUP BY session_id ORDER BY last_active DESC"
+    ).fetchall()
+    sessions = []
+    for r in rows:
+        sessions.append({
+            "id": r["session_id"],
+            "messages": r["msg_count"],
+            "last_active": r["last_active"],
+        })
+    return {"sessions": sessions}
+
+@app.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get messages for a session."""
+    messages = memory.get_messages(session_id, limit=100)
+    return {"session_id": session_id, "messages": messages}
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session."""
+    memory.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    memory.conn.commit()
+    return {"status": "deleted", "session_id": session_id}
+
+@app.post("/export")
+async def export_data():
+    """Export all data as JSON."""
+    data = {
+        "version": "0.2.0",
+        "exported_at": time.time(),
+        "messages": [],
+        "facts": memory.list_facts(limit=9999),
+    }
+    rows = memory.conn.execute("SELECT role, content, session_id, timestamp FROM messages ORDER BY timestamp").fetchall()
+    for r in rows:
+        data["messages"].append({
+            "role": r["role"],
+            "content": r["content"],
+            "session_id": r["session_id"],
+            "timestamp": r["timestamp"],
+        })
+    return data
+
+@app.post("/import")
+async def import_data(request: Request):
+    """Import data from JSON export."""
+    body = await request.json()
+    imported = {"messages": 0, "facts": 0}
+    
+    for msg in body.get("messages", []):
+        memory.store_message(msg["role"], msg["content"], msg.get("session_id", "default"))
+        imported["messages"] += 1
+    
+    for fact in body.get("facts", []):
+        memory.store_fact(fact["key"], fact["value"], fact.get("category", "general"))
+        imported["facts"] += 1
+    
+    return {"status": "imported", "counts": imported}
