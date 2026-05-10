@@ -425,3 +425,25 @@ async def import_data(request: Request):
         imported["facts"] += 1
     
     return {"status": "imported", "counts": imported}
+
+# --- Image Generation ---
+
+@app.post("/generate")
+async def generate_image(request: Request):
+    """Generate an image description/prompt (text-to-image concept)."""
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    if not prompt:
+        return {"error": "prompt is required"}
+    
+    messages = [
+        {"role": "system", "content": "You are an image description generator. Given a prompt, describe a detailed visual scene. Be vivid and specific."},
+        {"role": "user", "content": f"Describe this image in detail: {prompt}"}
+    ]
+    result = await llm.chat(messages)
+    if "error" in result:
+        return result
+    try:
+        return {"description": result["choices"][0]["message"]["content"], "prompt": prompt}
+    except:
+        return {"error": "Generation failed"}
