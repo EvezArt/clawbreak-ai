@@ -111,10 +111,10 @@ class TransferStation:
         return f"""#!/bin/bash
 # ClawBreak Agent Restore Script
 # Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-# Agent: {agent['name']} ({agent['id']})
+# Agent metadata stays in manifest.json; never interpolate it into shell source.
 set -e
 
-echo "⚡ Restoring agent: {agent['name']}"
+echo "Restoring agent snapshot"
 
 # 1. Install deps
 echo "[1/5] Installing dependencies..."
@@ -183,6 +183,10 @@ fi
         # Step 2: Transfer. Use argv arrays and retain normal SSH host-key checking.
         self.registry.update_transfer(transfer_id, "transferring")
         tarball_path = Path(tarball).expanduser().resolve()
+        snapshots_root = self.snapshots_dir.expanduser().resolve()
+        if tarball_path.parent != snapshots_root or not tarball_path.is_file():
+            self.registry.update_transfer(transfer_id, "failed", "Snapshot path is outside the snapshots directory")
+            return {"error": "Snapshot path is outside the snapshots directory"}
         tarball_name = tarball_path.name
         if not re.fullmatch(r"snap_[A-Za-z0-9_-]+_[0-9]+\.tar\.gz", tarball_name):
             self.registry.update_transfer(transfer_id, "failed", "Unsafe snapshot filename")
