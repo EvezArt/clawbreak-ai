@@ -1,5 +1,6 @@
 """ClawBreak - Tool execution engine."""
 import subprocess
+import shlex
 import json
 import os
 import time
@@ -37,23 +38,43 @@ class ToolEngine:
             return {"error": str(e)}
 
     def _tool_shell(self, command="", timeout=None):
-        """Run a bash command. Args: command (str), timeout (int, default 30)"""
-        timeout = timeout or self.config.get("tools", "shell_timeout")
+        """Run a restricted, read-only command. Arbitrary shell execution is disabled."""
+        timeout = min(int(timeout or self.config.get("tools", "shell_timeout") or 30), 30)
+        if not isinstance(command, str) or not command.strip():
+            return "Error: command required"
+        if any(op in command for op in (";", "|", "&", ">", "<", "`", "$", "\n", "\r")):
+            return "Blocked: shell operators and expansions are not allowed"
         try:
-            result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
-                timeout=timeout, cwd=os.path.expanduser("~")
-            )
+            argv = shlex.split(command)
+        except ValueError as exc:
+            return f"Blocked: invalid command syntax: {exc}"
+        if not argv:
+            return "Error: command required"
+        if argv[0] == "pwd":
+            if len(argv) != 1:
+                return "Blocked: pwd takes no arguments"
+        elif argv[0] == "ls":
+            if any(arg.startswith("-") and arg not in {"-l", "-a", "-la", "-al", "--all"} for arg in argv[1:]):
+                return "Blocked: unsupported ls option"
+        elif argv[0] == "git" and len(argv) >= 2 and argv[1] in {"status", "diff"}:
+            if any(arg.startswith("-") and arg not in {"--short", "--porcelain", "--stat", "--name-only", "--check", "--cached"} for arg in argv[2:]):
+                return "Blocked: unsupported git option"
+            if any(not arg.startswith("-") for arg in argv[2:]):
+                return "Blocked: git path/ref arguments are not allowed"
+        else:
+            return "Blocked: allowed commands are pwd, ls, git status, git diff"
+        try:
+            result = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=timeout, cwd=os.getcwd())
             output = result.stdout
             if result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             if result.returncode != 0:
                 output += f"\nExit code: {result.returncode}"
-            return output[:10000]  # Limit output
+            return output[:10000]
         except subprocess.TimeoutExpired:
             return f"Command timed out after {timeout}s"
-        except Exception as e:
-            return f"Error: {e}"
+        except Exception as exc:
+            return f"Error: {exc}"
 
     def _tool_search(self, query="", categories="general", engines="", limit=5):
         """Search the web via SearXNG. Args: query (str), categories (str), limit (int)"""
