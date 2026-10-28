@@ -13,6 +13,8 @@ import os
 import json
 import time
 import subprocess
+import shlex
+import re
 import httpx
 import asyncio
 from pathlib import Path
@@ -109,10 +111,10 @@ class TransferStation:
         return f"""#!/bin/bash
 # ClawBreak Agent Restore Script
 # Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-# Agent: {agent['name']} ({agent['id']})
+# Agent metadata stays in manifest.json; never interpolate it into shell source.
 set -e
 
-echo "⚡ Restoring agent: {agent['name']}"
+echo "Restoring agent snapshot"
 
 # 1. Install deps
 echo "[1/5] Installing dependencies..."
@@ -158,6 +160,12 @@ fi
         5. Update registry
         """
         transfer_id = f"xfer_{int(time.time())}"
+        if os.environ.get("EVEZ_ENABLE_REMOTE_TRANSFER", "0").strip() != "1":
+            return {"error": "Remote transfer is disabled; set EVEZ_ENABLE_REMOTE_TRANSFER=1 after reviewing target and credentials."}
+        if not isinstance(target_host, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", target_host):
+            return {"error": "Invalid target host"}
+        if not isinstance(target_user, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,31}", target_user):
+            return {"error": "Invalid target user"}
         self.registry.create_transfer(transfer_id, agent_id, "local", target_host)
 
         # Step 1: Snapshot
@@ -172,31 +180,45 @@ fi
             self.registry.update_transfer(transfer_id, "failed", "No tarball created")
             return {"error": "No tarball created"}
 
-        # Step 2: Transfer
+        # Step 2: Transfer. Use argv arrays and retain normal SSH host-key checking.
         self.registry.update_transfer(transfer_id, "transferring")
-        scp_target = f"{target_user}@{target_host}:/tmp/"
-
-        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+        tarball_path = Path(tarball).expanduser().resolve()
+        snapshots_root = self.snapshots_dir.expanduser().resolve()
+        if tarball_path.parent != snapshots_root or not tarball_path.is_file():
+            self.registry.update_transfer(transfer_id, "failed", "Snapshot path is outside the snapshots directory")
+            return {"error": "Snapshot path is outside the snapshots directory"}
+        tarball_name = tarball_path.name
+        if not re.fullmatch(r"snap_[A-Za-z0-9_-]+_[0-9]+\.tar\.gz", tarball_name):
+            self.registry.update_transfer(transfer_id, "failed", "Unsafe snapshot filename")
+            return {"error": "Unsafe snapshot filename"}
+        snapshot_dir_name = tarball_name[:-7]
+        ssh_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
         if ssh_key:
-            ssh_opts += f" -i {ssh_key}"
+            ssh_opts.extend(["-i", str(Path(ssh_key).expanduser().resolve())])
+        destination = f"{target_user}@{target_host}:/tmp/{tarball_name}"
 
         result = subprocess.run(
-            f"scp {ssh_opts} {tarball} {scp_target}",
-            shell=True, capture_output=True, text=True, timeout=120
+            ["scp", *ssh_opts, str(tarball_path), destination],
+            shell=False, capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:
             self.registry.update_transfer(transfer_id, "failed", result.stderr[:500])
             return {"error": f"SCP failed: {result.stderr[:200]}"}
 
-        # Step 3: Restore on target
+        # Step 3: Run a fixed restore command for the validated snapshot directory.
         self.registry.update_transfer(transfer_id, "restoring")
-        tarball_name = Path(tarball).name
-        restore_cmd = f"cd /tmp && tar xzf {tarball_name} && cd $(ls -d snap_*/ | head -1) && bash restore.sh"
-
-        result = subprocess.run(
-            f"ssh {ssh_opts} {target_user}@{target_host} '{restore_cmd}'",
-            shell=True, capture_output=True, text=True, timeout=300
+        restore_cmd = (
+            "cd /tmp && tar xzf " + shlex.quote(tarball_name) +
+            " && cd " + shlex.quote(snapshot_dir_name) +
+            " && bash restore.sh"
         )
+        result = subprocess.run(
+            ["ssh", *ssh_opts, f"{target_user}@{target_host}", restore_cmd],
+            shell=False, capture_output=True, text=True, timeout=300
+        )
+        if result.returncode != 0:
+            self.registry.update_transfer(transfer_id, "failed", result.stderr[:500])
+            return {"error": f"Remote restore failed: {result.stderr[:200]}"}
 
         # Step 4: Verify
         self.registry.update_transfer(transfer_id, "verifying")

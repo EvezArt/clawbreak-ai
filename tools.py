@@ -1,5 +1,6 @@
 """ClawBreak - Tool execution engine."""
 import subprocess
+import shlex
 import json
 import os
 import time
@@ -37,23 +38,53 @@ class ToolEngine:
             return {"error": str(e)}
 
     def _tool_shell(self, command="", timeout=None):
-        """Run a bash command. Args: command (str), timeout (int, default 30)"""
-        timeout = timeout or self.config.get("tools", "shell_timeout")
+        """Run a restricted, read-only command. Arbitrary shell execution is disabled."""
+        timeout = min(int(timeout or self.config.get("tools", "shell_timeout") or 30), 30)
+        if not isinstance(command, str) or not command.strip():
+            return "Error: command required"
+        if any(op in command for op in (";", "|", "&", ">", "<", "`", "$", "\n", "\r")):
+            return "Blocked: shell operators and expansions are not allowed"
         try:
-            result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
-                timeout=timeout, cwd=os.path.expanduser("~")
-            )
+            argv = shlex.split(command)
+        except ValueError as exc:
+            return f"Blocked: invalid command syntax: {exc}"
+        if not argv:
+            return "Error: command required"
+        if argv[0] == "pwd":
+            if len(argv) != 1:
+                return "Blocked: pwd takes no arguments"
+        elif argv[0] == "ls":
+            root = Path(os.environ.get("CLAWBREAK_WORKSPACE", os.getcwd())).expanduser().resolve()
+            for arg in argv[1:]:
+                if arg.startswith("-"):
+                    if arg not in {"-l", "-a", "-la", "-al", "--all"}:
+                        return "Blocked: unsupported ls option"
+                else:
+                    target = Path(arg).expanduser()
+                    if not target.is_absolute():
+                        target = root / target
+                    target = target.resolve()
+                    if target != root and root not in target.parents:
+                        return "Blocked: ls path is outside the workspace"
+        elif argv[0] == "git" and len(argv) >= 2 and argv[1] in {"status", "diff"}:
+            if any(arg.startswith("-") and arg not in {"--short", "--porcelain", "--stat", "--name-only", "--check", "--cached"} for arg in argv[2:]):
+                return "Blocked: unsupported git option"
+            if any(not arg.startswith("-") for arg in argv[2:]):
+                return "Blocked: git path/ref arguments are not allowed"
+        else:
+            return "Blocked: allowed commands are pwd, ls, git status, git diff"
+        try:
+            result = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=timeout, cwd=str(Path(os.environ.get("CLAWBREAK_WORKSPACE", os.getcwd())).expanduser().resolve()))
             output = result.stdout
             if result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             if result.returncode != 0:
                 output += f"\nExit code: {result.returncode}"
-            return output[:10000]  # Limit output
+            return output[:10000]
         except subprocess.TimeoutExpired:
             return f"Command timed out after {timeout}s"
-        except Exception as e:
-            return f"Error: {e}"
+        except Exception as exc:
+            return f"Error: {exc}"
 
     def _tool_search(self, query="", categories="general", engines="", limit=5):
         """Search the web via SearXNG. Args: query (str), categories (str), limit (int)"""
@@ -102,32 +133,50 @@ class ToolEngine:
         else:
             return f"Unknown action: {action}. Use: store, recall, list, delete"
 
+    def _workspace_root(self):
+        return Path(os.environ.get("CLAWBREAK_WORKSPACE", os.getcwd())).expanduser().resolve()
+
+    def _resolve_workspace_path(self, raw_path="", allow_root=False):
+        root = self._workspace_root()
+        candidate = Path(os.path.expanduser(raw_path))
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        candidate = candidate.resolve()
+        if candidate == root and allow_root:
+            return candidate
+        if candidate == root or root not in candidate.parents:
+            raise PermissionError("Path is outside the configured workspace")
+        return candidate
+
     def _tool_file(self, action="read", path="", content=""):
-        """Read or write files. Args: action (read|write|list), path, content"""
+        """Read or write files only inside CLAWBREAK_WORKSPACE (defaults to current directory)."""
         if action == "read":
             if not path:
                 return "Error: path required"
             try:
-                p = Path(os.path.expanduser(path))
-                return p.read_text()[:10000]
+                return self._resolve_workspace_path(path).read_text()[:10000]
             except Exception as e:
                 return f"Read error: {e}"
         elif action == "write":
-            if not path or not content:
-                return "Error: path and content required"
+            if not path or not isinstance(content, str):
+                return "Error: path and text content required"
             try:
-                p = Path(os.path.expanduser(path))
+                p = self._resolve_workspace_path(path)
                 p.parent.mkdir(parents=True, exist_ok=True)
+                p = self._resolve_workspace_path(str(p))
                 p.write_text(content)
-                return f"Written {len(content)} chars to {path}"
+                return f"Written {len(content)} chars to {p}"
             except Exception as e:
                 return f"Write error: {e}"
         elif action == "list":
-            target = Path(os.path.expanduser(path or "~"))
-            if target.is_dir():
-                items = list(target.iterdir())[:50]
-                return "\n".join(f"{'📁' if i.is_dir() else '📄'} {i.name}" for i in items)
-            return f"Not a directory: {path}"
+            try:
+                target = self._resolve_workspace_path(path, allow_root=not bool(path)) if path else self._workspace_root()
+                if target.is_dir():
+                    items = list(target.iterdir())[:50]
+                    return "\\n".join(f"{'DIR' if i.is_dir() else 'FILE'} {i.name}" for i in items)
+                return f"Not a directory: {path}"
+            except Exception as e:
+                return f"List error: {e}"
         return f"Unknown action: {action}"
 
     def _tool_sysinfo(self):
