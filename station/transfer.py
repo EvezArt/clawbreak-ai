@@ -184,7 +184,7 @@ fi
         self.registry.update_transfer(transfer_id, "transferring")
         tarball_path = Path(tarball).expanduser().resolve()
         tarball_name = tarball_path.name
-        if not re.fullmatch(r"snap_[A-Za-z0-9_-]+_[0-9]+\\.tar\\.gz", tarball_name):
+        if not re.fullmatch(r"snap_[A-Za-z0-9_-]+_[0-9]+\.tar\.gz", tarball_name):
             self.registry.update_transfer(transfer_id, "failed", "Unsafe snapshot filename")
             return {"error": "Unsafe snapshot filename"}
         snapshot_dir_name = tarball_name[:-7]
