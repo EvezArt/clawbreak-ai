@@ -54,8 +54,18 @@ class ToolEngine:
             if len(argv) != 1:
                 return "Blocked: pwd takes no arguments"
         elif argv[0] == "ls":
-            if any(arg.startswith("-") and arg not in {"-l", "-a", "-la", "-al", "--all"} for arg in argv[1:]):
-                return "Blocked: unsupported ls option"
+            root = Path(os.environ.get("CLAWBREAK_WORKSPACE", os.getcwd())).expanduser().resolve()
+            for arg in argv[1:]:
+                if arg.startswith("-"):
+                    if arg not in {"-l", "-a", "-la", "-al", "--all"}:
+                        return "Blocked: unsupported ls option"
+                else:
+                    target = Path(arg).expanduser()
+                    if not target.is_absolute():
+                        target = root / target
+                    target = target.resolve()
+                    if target != root and root not in target.parents:
+                        return "Blocked: ls path is outside the workspace"
         elif argv[0] == "git" and len(argv) >= 2 and argv[1] in {"status", "diff"}:
             if any(arg.startswith("-") and arg not in {"--short", "--porcelain", "--stat", "--name-only", "--check", "--cached"} for arg in argv[2:]):
                 return "Blocked: unsupported git option"
