@@ -74,7 +74,7 @@ class ToolEngine:
         else:
             return "Blocked: allowed commands are pwd, ls, git status, git diff"
         try:
-            result = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=timeout, cwd=os.getcwd())
+            result = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=timeout, cwd=str(Path(os.environ.get("CLAWBREAK_WORKSPACE", os.getcwd())).expanduser().resolve()))
             output = result.stdout
             if result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
