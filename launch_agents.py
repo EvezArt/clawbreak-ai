@@ -106,9 +106,17 @@ def main():
 
     elif action == "stop":
         print("Stopping specialized agents (keeping primary)...")
-        os.system("pkill -f 'port 8081' 2>/dev/null")
-        os.system("pkill -f 'port 8082' 2>/dev/null")
-        os.system("pkill -f 'port 8083' 2>/dev/null")
+        for port in (8081, 8082, 8083):
+            # Kill only the listener on this exact port; -f pattern matching
+            # could match this agent's own command line and kill itself.
+            try:
+                out = subprocess.run(["lsof", "-ti", f":{port}"],
+                                     capture_output=True, text=True, timeout=5).stdout.split()
+                for pid in out:
+                    if pid.isdigit() and int(pid) != os.getpid():
+                        os.kill(int(pid), 15)
+            except (FileNotFoundError, ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+                pass
         print("Stopped.")
 
 if __name__ == "__main__":
